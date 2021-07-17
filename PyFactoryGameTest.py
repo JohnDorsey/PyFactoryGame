@@ -1,43 +1,37 @@
 
 
 
-"""
-class Sict(dict): #Sict means safedict.
-  def __getitem__(self,key):
-    try:
-      return dict.__getitem__(self,key)
-    except KeyError:
-      return None
 
-
-def sictify(thing):
-  if isinstance(thing,dict):
-    for key in thing.keys():
-      if isinstance(thing[key],dict):
-        thing[key] = Sict(thing[key])
-      sictify(thing[key])
-  elif type(thing) == list:
-    for i in range(len(thing)):
-      if isinstance(thing[i],dict):
-        thing[i] = Sict(thing[i])
-      sictify(thing[i])
-"""
+def allTheSame(inputSeq):
+  justStarted = True
+  sharedValue = None
+  for item in inputSeq:
+    if justStarted:
+      sharedValue = item
+      justStarted = False
+      continue
+    if item != sharedValue:
+      return False
+  return True
 
 
 possibilities = [
     {"name":"zap","is_freestanding":False,"is_discrete":False},
+    {"name":"rock","is_freestanding":True,"is_discrete":False,"cost":[{"name":"stone","scale":1}]},
+    {"name":"stone","is_freestanding":True,"is_discrete":False,"cost":[{"name":"rock","scale":0.5}]},
     {"name":"crate","is_freestanding":True,"is_discrete":True,"storage":[]},
     {"name":"battery","is_freestanding":True,"is_discrete":True,"storage":[{"name":"zap"}]},
     {"name":"solar_panel","is_freestanding":True,"is_discrete":False,"cost":[{"name":"zap","scale":20}]}
   ]
 
 
-world = [{"name":"battery","storage":[{"name":"zap","scale":100}]}]
+world = [{"name":"battery","storage":[{"name":"zap","scale":100}]},{"name":"rock","scale":1000000}]
 
-"""
-sictify(possibilities)
-sictify(world)
-"""
+
+
+keysNotAllowedInWorld = ["cost","is_freestanding","is_discrete","is_summoned"]
+keysToRedactDuringSummon = ["cost"]
+
 
 def genMatchInSeq(inputSeq,identifier,compareFun=(lambda x,y: x==y)):
   for item in inputSeq:
@@ -75,14 +69,6 @@ def augment(inputDict,fallbackDict,recursive=False):
         if isinstance(inputDict[key],dict) and isinstance(fallbackDict[key],dict):
           augment(inputDict[key],fallbackDict[key])
 
-def augmented(inputDict,fallbackDict):
-  result = {}
-  for key in inputDict.keys():
-    result[key] = inputDict[key]
-  for key in fallbackDict.keys():
-    if not key in result.keys():
-      result[key] = fallbackDict[key]
-  return result
 
 def redactKeys(inputDict,keysToRedact,recursive=True):
   for key in inputDict.keys():
@@ -96,7 +82,11 @@ def redactKeys(inputDict,keysToRedact,recursive=True):
 def getClone(thing):
   return eval(str(thing))
 
+
+
+
 def subtractStructures(thing1,thing2,dryRun=False,symmetric=False): #this will likely break.
+  print("subtractStructures is dangerous because its behavior is not obvious enough.")
   augment(thing1,{"scale":1})
   augment(thing2,{"scale":1})
   assert isinstance(thing1,dict)
@@ -109,11 +99,86 @@ def subtractStructures(thing1,thing2,dryRun=False,symmetric=False): #this will l
       match["scale"] -= thing2["scale"]
       if symmetric:
         thing2["scale"] = 0
-    return True
-    
+  return True
 
-keysNotAllowedInWorld = ["cost","is_freestanding","is_discrete","is_summoned"]
-keysToRedactDuringSummon = ["cost"]
+
+
+
+def exploreParallelDicts(inputDicts,workerFun,allowedKeys=None,disallowedKeys=None,allowedTypes=None,disallowedTypes=None):
+  assert len(inputDicts) > 0
+  for inputDict in inputDicts:
+    assert isinstance(inputDict,dict)
+  if allowedKeys and disallowedKeys:
+    for key in allowedKeys:
+      if key in disallowedKeys:
+        raise ValueError("allowedKeys and disallowedKeys overlap.")
+  for key in inputDicts[0].keys():
+    if allowedKeys:
+      if not key in allowedKeys:
+        continue
+    if disallowedKeys:
+      if key in disallowedKeys:
+        continue
+    if allowedTypes:
+      if not type(inputDicts[0][key]) in allowedTypes:
+        continue
+    if disallowedTypes:
+      if type(inputDicts[0][key]) in disallowedTypes:
+        continue
+    if not all((key in testDict.keys()) for testDict in inputDicts):
+      continue
+    if not allTheSame(type(testDict[key]) for testDict in inputDicts):
+      continue
+    print("running workerFun")
+    workerFun(key,inputDicts)
+    if all(isinstance(testDict[key],dict) for testDict in inputDicts):
+      exploreParallelDicts([item[key] for item in inputDicts],workerFun,allowedKeys=allowedKeys,disallowedKeys=disallowedKeys,allowedTypes=allowedTypes,disallowedTypes=disallowedTypes)
+      continue
+
+def transferParallelDictValuesLeft(inputDicts,allowedKeys=None,disallowedKeys=None,allowedTypes=None,disallowedTypes=None):
+  def transferFun(inputKey,subjects):
+    assert len(subjects) > 1
+    if type(subjects[0][inputKey]) not in [int,float]:
+      return
+    for otherSubject in subjects[1:]:
+      print("before edit (subjects[0],otherSubject)="+str((subjects[0],otherSubject))+".")
+      subjects[0][inputKey] += otherSubject[inputKey]
+      otherSubject[inputKey] -= otherSubject[inputKey]
+      print("after edit (subjects[0],otherSubject)="+str((subjects[0],otherSubject))+".")
+  exploreParallelDicts(inputDicts,transferFun,allowedKeys=None,disallowedKeys=None,allowedTypes=None,disallowedTypes=None)
+
+"""
+def transferDictValues(destination,source,allowedKeys=None,disallowedKeys=None):
+  assert isinstance(destination,dict)
+  assert isinstance(source,dict)
+  if allowedKeys and disallowedKeys:
+    for key in allowedKeys:
+      if key in disallowedKeys:
+        raise ValueError("allowedKeys and disallowedKeys overlap.")
+  for key in destination.keys():
+    if allowedKeys:
+      if not key in allowedKeys:
+        continue
+    if disallowedKeys:
+      if key in disallowedKeys:
+        continue
+    if not key in source.keys():
+      continue
+    if not type(destination[key]) == type(source[key]):
+      continue
+    if isinstance(destination[key],dict) and isinstance(source[key],dict):
+      transferMemberValues(destination[key],source[key],allowedKeys=allowedKeys,disallowedKeys=disallowedKeys)
+      continue
+    if isinstance(destination[key],list) and isinstance(source[key],list):
+      print("transferDictValues: two values are both lists, but lists can't be handled.")
+      continue
+    if type(destination[key]) in [int,float] and type(source[key]) in [int,float]:
+      destination[key] += source[key]
+      source[key] -= source[key]
+      continue
+    print("transferDictValues: two items are the same type, but can't be handled.")
+    continue
+"""
 
 
 def tick():
